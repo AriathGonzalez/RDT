@@ -12,7 +12,7 @@ Note: We will keep doing this until file fully sends as MSS is 1000 bytes.
 import socket
 import sys
 import udt, packet
-import timer as t
+import timer as t, time
 import os
 
 
@@ -24,52 +24,125 @@ MSS = 1000
 # TODO: What's the point of 'i' if you already add the seq # to the data before hand?
 # Also, is it really this simple?
 def create_checksum(i, data):
-    '''
-    Get sum of bits -> 1's Complement (Flip bits) = checksum
-    '''
-    # seq_bits = bin(i)[2:].zfill(4)  # test
+    """
+    Creates a checksum for the given data.
 
-    # data = seq_bits + data  # test
+    Parameters:
+        i (int): Sequence number.
+        data (bytes): Data for which checksum is to be created.
 
-    dataSum = len(data)
-    bitSum = bin(dataSum)[2:]
-    print("client-bitSum: ", bitSum)
+    Returns:
+        str: Computed checksum.
+    """
+    data_sum = len(data)
+    bit_sum = bin(data_sum)[2:]
+    
     # Pad to 10 bits
-    while len(bitSum) < 10: # 10 before
-        bitSum = '0' + bitSum
+    while len(bit_sum) < 10: 
+        bit_sum = '0' + bit_sum
 
     checksum = ''
-    for bit in bitSum:
+    for bit in bit_sum:
         checksum += '1' if bit == '0' else '0'
 
     return checksum
 
-
+# TODO: do i need to do the htons and ntohns stuff or nah?
 def verify_checksum(i, checksum, data):
-    # received_seq = int(checksum[:4], 2)
-    # print("client-received-seq: ", received_seq)
-    # seq_bits = bin(i)[2:].zfill(4)  # test
-    # print("seq_bits: ", int(seq_bits, 2))
+    """
+    Verifies the checksum of the received data.
 
-    # seqSum = bin(received_seq + int(seq_bits, 2))
-    # for bit in seqSum:
-    #     if bit == '0':
-    #         return False
-   
+    Parameters:
+        i (int): Sequence number.
+        checksum (str): Received checksum.
+        data (bytes): Received data.
 
-    print("client-checksum: ", checksum)
-    print("client-data: ", data)
-    # implement logic to verify checksum
-    dataSum = len(data)
-    totalSum = dataSum + int(checksum, 2)
-    totalSumBits = bin(totalSum)[2:]
-    for bit in totalSumBits:
+    Returns:
+        bool: True if the checksum is valid, False otherwise.
+    """
+    data_sum = len(data)
+    total_sum = data_sum + int(checksum, 2)
+    total_sum_bits = bin(total_sum)[2:]
+    
+    for bit in total_sum_bits:
         if bit == '0':
             return False
     return True
 
 
 def main():
+    # Get chosen file from cache
+    data = b''
+    with open(file_path, 'rb') as file:
+        data += file.read()
+
+    # Separate data into packets of size 'MSS'
+    # TODO: Ask if this is a good approach or what I should do instead.
+    # Currently taking in all the data, and separating them into a list of strings, each string
+    # being of size MSS or 1000
+    data_packets = [data[i:i + MSS] for i in range(0, len(data), MSS)]
+    data_packets.insert(0, extension)
+
+    # Create a UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(0)	 # making the socket non-blocking
+    server_address = (HOST, port)
+
+    start_time = time.time()
+    mytimer = t.Timer(1)
+    try:
+        # Send data
+        total_transmitted_packets = 0 # Total transmissions
+        transmitted_packets = 0 # Actually sent
+
+        while transmitted_packets < len(data_packets):
+            if transmitted_packets == 0:
+                pkt = packet.make(transmitted_packets % 2, bytes("FIRST", "utf-8"), bytes(data_packets[transmitted_packets], "utf-8"))
+                udt.send(pkt, sock, server_address)
+                print("Client: initialization sent!")
+            else:
+                text_to_send = data_packets[transmitted_packets]# TODO: Should i keep this i to 0 or 1 for SnW; + str(actuallySent % 2)
+                checksum = create_checksum(transmitted_packets % 2, text_to_send).encode('utf-8')
+                pkt = packet.make(transmitted_packets % 2, checksum, text_to_send)
+                udt.send(pkt, sock, server_address)
+                print("Client: Pkt sent - ", text_to_send)
+
+            # Start timer
+            mytimer.start()
+            while mytimer.running() and not mytimer.timeout():
+                rcvpkt, _ = udt.recv(sock)
+                if rcvpkt:
+                        seq, checksum, data_rcvd = packet.extract(rcvpkt)
+                        if verify_checksum(seq, checksum, data_rcvd):
+                            print("Client: Ack Received - %s", data_rcvd)
+                            transmitted_packets += 1
+                            total_transmitted_packets += 1
+                            mytimer.stop()
+                continue
+            mytimer.stop()
+            total_transmitted_packets += 1
+
+    finally:
+        text_to_send = "DONE"
+        pkt = packet.make(transmitted_packets % 2, bytes(text_to_send, 'utf-8'))
+        udt.send(pkt, sock, server_address)
+        print("I am DONE sending")
+
+        end_time = time.time()
+        transmission_time = end_time - start_time
+        retransmissions = total_transmitted_packets - transmitted_packets
+
+        # Summary
+        # i. Total number of transmitted packets.
+        print("Total number of transmitted packets: ", total_transmitted_packets)
+        # ii. Number of retransmitted packets:
+        print("Number of retransmitted packets: ", retransmissions)
+        # iii. Time taken to complete file transfer.
+        print("Time taken to complete file transfer: ", transmission_time)
+        sock.close()
+
+
+if __name__ == "__main__":
     # Ask for a port number and the protocol to use
     if len(sys.argv) < 7:
         print('Usage : "python client.py -p port -r protocol -f file (0 - SnW, 1 - GBN)"\n[port: port number of the server to connect]\n[protocol: protocol the server will use (SnW or GBN)]\n[file: file that will be sent to server]')
@@ -88,80 +161,12 @@ def main():
     port = int(args['-p'])
     protocol = int(args['-r'])
     file = args["-f"]
-    extension = file.split('.')[-1].lower()
-    filePath = CACHE + file
 
-    if not os.path.exists(filePath):
+    extension = file.split('.')[-1].lower()
+    file_path = CACHE + file
+
+    if not os.path.exists(file_path):
         print("Error: File does not exist.")
         sys.exit(2)
 
-    # Get chosen file from cache
-    data = b''
-    with open(filePath, 'rb') as file:
-        data += file.read()
-
-    # Separate data into packets of size 'MSS'
-    # TODO: Ask if this is a good approach or what I should do instead.
-    # Currently taking in all the data, and separating them into a list of strings, each string
-    # being of size MSS or 1000
-    dataPackets = [data[i:i + MSS] for i in range(0, len(data), MSS)]
-    dataPackets.insert(0, extension)
-    print("number of packets to send: ", len(dataPackets))
-    # Create a UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setblocking(0)	 # making the socket non-blocking
-    server_address = (HOST, port)
-
-    mytimer = t.Timer(1)
-    try:
-
-        # Send data
-        retransmissions = 0 # total transmissions
-        actuallySent = 0
-
-        while actuallySent < len(dataPackets):
-            if actuallySent == 0:
-                pkt = packet.make(actuallySent % 2, bytes("FIRST", "utf-8"), bytes(dataPackets[actuallySent], "utf-8"))
-                udt.send(pkt, sock, server_address)
-                print("Client: Initialization sent!")
-            else:
-                textToSend = dataPackets[actuallySent] # TODO: Should i keep this i to 0 or 1 for SnW; + str(actuallySent % 2)
-                checksum = create_checksum(actuallySent % 2, textToSend).encode('utf-8')
-                print("checksum now: ", checksum)
-                pkt = packet.make(actuallySent % 2, checksum, textToSend)
-                udt.send(pkt, sock, server_address)
-                #textToSend = textToSend.decode("utf-8")
-                #print("Client: Pkt sent - " + textToSend)
-
-            # start timer
-            mytimer.start()
-            while mytimer.running() and not mytimer.timeout():
-                # sock.settimeout(mytimer.time_left())
-
-             
-                rcvpkt, addr = udt.recv(sock)
-                print("client-rcvpkt: ", rcvpkt)
-                if rcvpkt:
-                        seq, checksum, dataRcvd = packet.extract(rcvpkt)
-                        if verify_checksum(seq, checksum, dataRcvd):
-                            print("Client: Ack Received - %s", dataRcvd)
-                            actuallySent += 1
-                            mytimer.stop()
-                print("continue?")
-                continue
-            mytimer.stop()
-            print("i: ", retransmissions)
-            print("actuallySent: ", actuallySent)
-            print("len of packets: ", len(dataPackets))
-            retransmissions += 1
-
-    finally:
-        textToSend = "DONE"
-        pkt = packet.make(actuallySent % 2, bytes(textToSend, 'utf-8'))
-        udt.send(pkt, sock, server_address)
-        print("I am DONE sending")
-        sock.close()
-
-
-if __name__ == "__main__":
     main()
