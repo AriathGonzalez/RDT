@@ -241,8 +241,6 @@ def main():
     # Calculate number needed to determine the number of packets transmitted for the server side
     max_packets_transmitted = 2 if protocol == 0 else len(data_packets) + 1
     data_packets.insert(0, extension + f":{max_packets_transmitted}")
-    print("num of packets: ", len(data_packets) + 2)
-    print("last packet: " ,data_packets[0])
 
     # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
