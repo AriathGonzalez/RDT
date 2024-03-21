@@ -30,6 +30,27 @@ CACHE = "ServerCache/"
 MSS = 1000
 
 
+class ClientState:
+    """
+    Represents the state of a client.
+
+    Attributes:
+        rcv_base (int): The expected sequence number for the next packet to be received.
+        max_packets (int): The maximum number of packets transmitted by the client.
+    """
+
+    def __init__(self, initial_seq, max_packets):
+        """
+        Initializes a ClientState object.
+
+        Parameters:
+            initial_seq (int): The initial sequence number for the client.
+            max_packets (int): The maximum number of packets transmitted by the client.
+        """
+        self.rcv_base = initial_seq
+        self.max_packets = max_packets
+
+
 def create_checksum(i, data):
     """
     Creates a checksum for the given data.
@@ -41,6 +62,8 @@ def create_checksum(i, data):
     Returns:
         str: Computed checksum.
     """
+
+    # Get sum of bits
     data_sum = len(data)
     bit_sum = bin(data_sum)[2:]
 
@@ -48,6 +71,7 @@ def create_checksum(i, data):
     while len(bit_sum) < 10: 
         bit_sum = '0' + bit_sum
 
+    # Get Ones' Complement (Flip all the bits)
     checksum = ''
     for bit in bit_sum:
         checksum += '1' if bit == '0' else '0'
@@ -70,89 +94,9 @@ def verify_checksum(i, checksum, data):
     if checksum == b"DONE" or checksum == b"FIRST":
         return True
 
-    data_sum = len(data)
-    total_sum = data_sum + int(checksum, 2)
-    total_sum_bits = bin(total_sum)[2:]
-    for bit in total_sum_bits:
-        if bit == '0':
-            return False
-    return True
+    received_checksum = create_checksum(i, data).encode("utf-8")
 
-
-def snw_receiver(sock):
-    """
-    Receives packets using Stop-and-Wait protocol.
-
-    Parameters:
-    - sock (socket.socket): The UDP socket to receive packets on.
-    """
-    expected_seq = 0
-    while True:
-        pkt, addr = udt.recv(sock)
-        seq, checksum, data_rcvd = packet.extract(pkt)
-
-        if verify_checksum(seq, checksum, data_rcvd):
-            # TODO: Right now, Client doens't care about ack for last pkt or DONE
-            # End: close socket if "DONE" packet received
-            if checksum == b"DONE":
-                sock.close()
-                break
-            
-            # First: receive file extension to deliver following packets
-            if checksum == b"FIRST":
-                extension = data_rcvd.decode("utf-8")
-                expected_seq = 1
-
-            # Deliver the data
-            if checksum != b"FIRST" and (expected_seq % 2) == (seq % 2):
-                expected_seq += 1
-                output_file = f"{CACHE}{addr[0]}_{addr[1]}.{extension}"
-                with open(output_file, 'ab') as file:
-                    file.write(data_rcvd)
-
-            # Send acknowledgement
-            ack_to_send = "ACK - " + str(seq % 2)
-            ackpkt = packet.make(expected_seq % 2, create_checksum(expected_seq % 2 , ack_to_send).encode('utf-8'), bytes(ack_to_send, 'utf-8'))   # TODO: all seq here, were originally i
-            udt.send(ackpkt, sock, addr)
-            print("Server: Ack sent - %s", ack_to_send)
-
-
-def gbn_receiver(sock):
-    """
-    Receives packets using Go-Back-N protocol.
-
-    Parameters:
-    - sock (socket.socket): The UDP socket to receive packets on.
-    """
-    rcv_base = 0
-    while True:
-        pkt, addr = udt.recv(sock)
-        seq, checksum, data_rcvd = packet.extract(pkt)
-
-        if verify_checksum(seq, checksum, data_rcvd):
-            # TODO: Right now, Client doesn't care about ack for last pkt or DONE
-            # End: close socket if "DONE" packet received
-            if checksum == b"DONE":
-                sock.close()
-                break
-
-            # First: receive file extension to deliver following packets
-            if checksum == b"FIRST":
-                extension = data_rcvd.decode("utf-8")
-                rcv_base = 1
-
-            # Deliver the data
-            if checksum != b"FIRST" and rcv_base == seq: 
-                rcv_base += 1
-                output_file = f"{CACHE}{addr[0]}_{addr[1]}.{extension}"
-                with open(output_file, "ab") as file:
-                    file.write(data_rcvd)
-
-            # Send acknowledgement
-            ack_to_send = "ACK - " + str(seq)
-            ackpkt = packet.make(rcv_base, create_checksum(rcv_base, ack_to_send).encode("utf-8"), bytes(ack_to_send, "utf-8"))
-            udt.send(ackpkt, sock, addr)
-            print("Server: Ack sent - %s", ack_to_send)
+    return checksum == received_checksum
 
 
 def main():
@@ -165,13 +109,38 @@ def main():
     # Bind the socket to the port
     server_address = (HOST, port)
     sock.bind(server_address)
-    
-    # Choose protocol based on input
-    if protocol == 0:
-        snw_receiver(sock)
-    elif protocol == 1:
-        gbn_receiver(sock)
 
+    clients = {}   # Store the states for multiple clients
+    while True:
+        pkt, addr = udt.recv(sock)
+        seq, checksum, data_rcvd = packet.extract(pkt)
+
+        if verify_checksum(seq, checksum, data_rcvd):
+            # End: close socket if "DONE" packet received
+            if checksum == b"DONE":
+                del clients[addr]
+                sock.close()
+                break
+            
+            # First: receive file extension to deliver following packets
+            if checksum == b"FIRST":
+                data_str = data_rcvd.decode("utf-8")
+                extension, max_packets_transmitted = data_str.split(":")
+                clients[addr] = ClientState(1, int(max_packets_transmitted))  # (current packet, max packets)
+
+            # Deliver the data
+            if checksum != b"FIRST" and (clients[addr].rcv_base % clients[addr].max_packets) == (seq % clients[addr].max_packets):
+                clients[addr].rcv_base += 1  # Update expected sequence number
+                output_file = f"{CACHE}{addr[0]}_{addr[1]}.{extension}"
+                with open(output_file, 'ab') as file:
+                    file.write(data_rcvd)
+
+            # Send acknowledgement
+            ack_to_send = "ACK - " + str(seq % clients[addr].max_packets)
+            ackpkt = packet.make(clients[addr].rcv_base % clients[addr].max_packets, create_checksum(clients[addr].rcv_base % clients[addr].max_packets , ack_to_send).encode('utf-8'), bytes(ack_to_send, 'utf-8'))
+            udt.send(ackpkt, sock, addr)
+            print("Server: Ack sent - %s", ack_to_send)
+    
     
 if __name__ == "__main__":
     # Check command-line arguments
