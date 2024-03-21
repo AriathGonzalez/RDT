@@ -22,8 +22,6 @@ CACHE = "ClientCache/"
 MSS = 1000
 
 
-# TODO: What's the point of 'i' if you already add the seq # to the data before hand?
-# Also, is it really this simple?
 def create_checksum(i, data):
     """
     Creates a checksum for the given data.
@@ -35,6 +33,8 @@ def create_checksum(i, data):
     Returns:
         str: Computed checksum.
     """
+
+    # Get sum of bits
     data_sum = len(data)
     bit_sum = bin(data_sum)[2:]
     
@@ -42,6 +42,7 @@ def create_checksum(i, data):
     while len(bit_sum) < 10: 
         bit_sum = '0' + bit_sum
 
+    # Get Ones' Complement (Flip all the bits)
     checksum = ''
     for bit in bit_sum:
         checksum += '1' if bit == '0' else '0'
@@ -49,7 +50,6 @@ def create_checksum(i, data):
     return checksum
 
 
-# TODO: do i need to do the htons and ntohns stuff or nah?
 def verify_checksum(i, checksum, data):
     """
     Verifies the checksum of the received data.
@@ -62,14 +62,9 @@ def verify_checksum(i, checksum, data):
     Returns:
         bool: True if the checksum is valid, False otherwise.
     """
-    data_sum = len(data)
-    total_sum = data_sum + int(checksum, 2)
-    total_sum_bits = bin(total_sum)[2:]
-    
-    for bit in total_sum_bits:
-        if bit == '0':
-            return False
-    return True
+    received_checksum = create_checksum(i, data).encode("utf-8")
+
+    return checksum == received_checksum
 
 
 def print_summary(total_transmitted_packets, retransmissions, transmission_time):
@@ -103,7 +98,7 @@ def snw_sender(sock, server_address, data_packets):
                 udt.send(pkt, sock, server_address)
                 print("Client: initialization sent!")
             else:
-                text_to_send = data_packets[transmitted_packets] # TODO: Should i keep this i to 0 or 1 for SnW; + str(actuallySent % 2)
+                text_to_send = data_packets[transmitted_packets] 
                 checksum = create_checksum(transmitted_packets % 2, text_to_send).encode("utf-8")
                 pkt = packet.make(transmitted_packets % 2, checksum, text_to_send)
                 udt.send(pkt, sock, server_address)
@@ -160,8 +155,6 @@ def gbn_sender(sock, server_address, data_packets):
     try:
         total_transmitted_packets = 0
         number_of_timeouts = 0
-        # TODO: Reminder, we don't need to keep track of the number of packets actually transmitted
-        # this number should always be len(data_packets)
         # send_base: Number of already ack'ed packets + 1 or (# Green + 1)
         while send_base < len(data_packets):
             # Attempt to send window_size packets at a time
@@ -208,7 +201,7 @@ def gbn_sender(sock, server_address, data_packets):
                             send_base = seq + 1
                             break
                 continue
-            if not mytimer.running(): continue  # To go back to outer loop
+            if not mytimer.timeout(): continue  # To go back to outer loop
 
             # Handle timeout for unacknowledged packets
             mytimer.stop()
@@ -242,14 +235,14 @@ def main():
     data = b''
     with open(file_path, "rb") as file:
         data += file.read()
-
-    # TODO: Ask if this is a good approach or what I should do instead.
-    # Currently taking in all the data, and separating them into a list of strings, each string
-    # being of size MSS or 1000
         
     # Separate data into packets of size 'MSS'
     data_packets = [data[i:i + MSS] for i in range(0, len(data), MSS)]
-    data_packets.insert(0, extension)
+    # Calculate number needed to determine the number of packets transmitted for the server side
+    max_packets_transmitted = 2 if protocol == 0 else len(data_packets) + 1
+    data_packets.insert(0, extension + f":{max_packets_transmitted}")
+    print("num of packets: ", len(data_packets) + 2)
+    print("last packet: " ,data_packets[0])
 
     # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
