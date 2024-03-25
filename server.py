@@ -63,6 +63,9 @@ def create_checksum(i, data):
         str: Computed checksum.
     """
 
+    # Add sequence number
+    data = bytes([i]) + data
+
     # Get sum of bits
     data_sum = len(data)
     bit_sum = bin(data_sum)[2:]
@@ -137,7 +140,7 @@ def main():
 
             # Send acknowledgement
             ack_to_send = "ACK - " + str(seq % clients[addr].max_packets)
-            ackpkt = packet.make(clients[addr].rcv_base % clients[addr].max_packets, create_checksum(clients[addr].rcv_base % clients[addr].max_packets , ack_to_send).encode('utf-8'), bytes(ack_to_send, 'utf-8'))
+            ackpkt = packet.make(clients[addr].rcv_base % clients[addr].max_packets, create_checksum(clients[addr].rcv_base % clients[addr].max_packets , bytes(ack_to_send, "utf-8")).encode("utf-8"), bytes(ack_to_send, "utf-8"))
             udt.send(ackpkt, sock, addr)
             print("Server: Ack sent - %s", ack_to_send)
     
