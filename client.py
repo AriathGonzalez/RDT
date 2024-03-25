@@ -34,6 +34,9 @@ def create_checksum(i, data):
         str: Computed checksum.
     """
 
+    # Add sequence number
+    data = bytes([i]) + data
+
     # Get sum of bits
     data_sum = len(data)
     bit_sum = bin(data_sum)[2:]
