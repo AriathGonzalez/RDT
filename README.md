@@ -26,7 +26,7 @@ A simulation of Reliable Data Transfer (RDT) protocols, implementing **Stop-and-
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/rdt-simulation.git
+   git clone https://github.com/AriathGonzalez/RDT
    cd rdt-simulation
    ```
    
