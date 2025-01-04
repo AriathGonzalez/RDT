@@ -39,4 +39,10 @@ A simulation of Reliable Data Transfer (RDT) protocols, implementing **Stop-and-
 
 ## Usage
 1. Start the server
+   ```bash
+   python server.py -p port -r protocol -n window_size
+   ```
 2. Start the client
+   ```bash
+   python client.py -p port -r protocol -f file -n window_size
+   ```
